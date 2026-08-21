@@ -73,6 +73,9 @@ public final class PythonEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        let gstate = PyGILState_Ensure()
+        defer { PyGILState_Release(gstate) }
+
         guard PyRun_SimpleString(code) == 0 else {
             throw PythonError.executionFailed("Failed to execute Python statement")
         }
@@ -84,6 +87,9 @@ public final class PythonEngine: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
+
+        let gstate = PyGILState_Ensure()
+        defer { PyGILState_Release(gstate) }
 
         let exprB64 = Data(expression.utf8).base64EncodedString()
         let script = """
@@ -101,6 +107,9 @@ public final class PythonEngine: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
+
+        let gstate = PyGILState_Ensure()
+        defer { PyGILState_Release(gstate) }
 
         let nameB64 = Data(name.utf8).base64EncodedString()
         let codeB64 = Data(code.utf8).base64EncodedString()
@@ -128,6 +137,9 @@ public final class PythonEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        let gstate = PyGILState_Ensure()
+        defer { PyGILState_Release(gstate) }
+
         let argsData = (try? JSONSerialization.data(withJSONObject: args)) ?? Data("[]".utf8)
         let modB64 = Data(module.utf8).base64EncodedString()
         let funcB64 = Data(function.utf8).base64EncodedString()
@@ -141,7 +153,14 @@ public final class PythonEngine: @unchecked Sendable {
 
         __mod = sys.modules.get(__m_name)
         if __mod is None:
-            __result__ = json.dumps({"__error__": f"Module '{__m_name}' is not loaded"})
+            try:
+                import importlib
+                __mod = importlib.import_module(__m_name)
+            except Exception:
+                __mod = None
+
+        if __mod is None:
+            __result__ = json.dumps({"__error__": f"Module '{__m_name}' could not be loaded"})
         else:
             __fn = getattr(__mod, __f_name, None)
             if __fn is None or not callable(__fn):
@@ -204,9 +223,12 @@ public final class PythonEngine: @unchecked Sendable {
 
         guard let mainMod = PyImport_AddModule("__main__"),
               let mainDict = PyModule_GetDict(mainMod),
-              let resultObj = PyDict_GetItemString(mainDict, "__result__"),
-              let utf8 = PyUnicode_AsUTF8(resultObj) else {
+              let resultObj = PyDict_GetItemString(mainDict, "__result__") else {
             throw PythonError.invalidResponse("Failed to read __result__ from Python runtime")
+        }
+
+        guard let utf8 = PyUnicode_AsUTF8(resultObj) else {
+            throw PythonError.invalidResponse("Python __result__ is not a valid UTF8 string")
         }
 
         return String(cString: utf8)
