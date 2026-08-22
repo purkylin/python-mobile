@@ -56,6 +56,55 @@ struct PythonMobileTests {
         """)
     }
 
+    @Test("bs4 (BeautifulSoup4) HTML parsing")
+    func testBeautifulSoup() throws {
+        try PythonEngine.shared.runCode("""
+        from bs4 import BeautifulSoup
+
+        html_doc = "<html><body><div class='title'>Hello TVBox</div></body></html>"
+        soup = BeautifulSoup(html_doc, 'html.parser')
+        assert soup.find('div', class_='title').text == "Hello TVBox"
+        """)
+    }
+
+    @Test("pyquery CSS selector parsing")
+    func testPyQuery() throws {
+        try PythonEngine.shared.runCode("""
+        from pyquery import PyQuery as pq
+
+        doc = pq("<div class='container'><span id='msg'>Testing PyQuery</span></div>")
+        assert doc("#msg").text() == "Testing PyQuery"
+        """)
+    }
+
+    @Test("Crypto AES and PKCS7 Padding")
+    func testCryptoAES() throws {
+        try PythonEngine.shared.runCode("""
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import pad, unpad
+
+        key = b"1234567890123456"
+        iv = b"6543210987654321"
+        plaintext = b"TVBox Secret Token"
+
+        cipher = AES.new(key, AES.MODE_CBC, iv=iv)
+        ciphertext = cipher.encrypt(pad(plaintext, 16))
+
+        decipher = AES.new(key, AES.MODE_CBC, iv=iv)
+        decrypted = unpad(decipher.decrypt(ciphertext), 16)
+
+        assert decrypted == plaintext
+        """)
+    }
+
+    @Test("urllib3 HTTP library")
+    func testUrllib3() throws {
+        try PythonEngine.shared.runCode("""
+        import urllib3
+        assert hasattr(urllib3, "PoolManager")
+        """)
+    }
+
     @Test("Dynamic module loading and calling")
     func testModuleLoadingAndCall() throws {
         let pythonCode = """
