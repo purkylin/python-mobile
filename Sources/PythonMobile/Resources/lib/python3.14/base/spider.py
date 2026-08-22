@@ -64,10 +64,10 @@ class Spider:
     def localProxy(self, param):
         return []
 
-    def fetch(self, url, params=None, headers=None, timeout=15, cookies=None):
+    def fetch(self, url, params=None, headers=None, timeout=8, cookies=None):
         return self.get(url, params=params, headers=headers, timeout=timeout, cookies=cookies)
 
-    def get(self, url, params=None, headers=None, timeout=15, cookies=None):
+    def get(self, url, params=None, headers=None, timeout=8, cookies=None):
         if params:
             query = urllib.parse.urlencode(params)
             sep = "&" if "?" in url else "?"
