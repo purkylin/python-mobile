@@ -1,6 +1,10 @@
 # lxml/etree.py
 import re
-from html.parser import HTMLParser
+from html.parser import HTMLParser as _StdHTMLParser
+
+class LxmlError(Exception): pass
+class ParserError(LxmlError): pass
+class XMLSyntaxError(LxmlError): pass
 
 class _Element:
     def __init__(self, tag, attrib=None):
@@ -23,11 +27,29 @@ class _Element:
         elem.parent = self
         self._children.append(elem)
 
+    def insert(self, index, elem):
+        elem.parent = self
+        self._children.insert(index, elem)
+
+    def remove(self, elem):
+        if elem in self._children:
+            self._children.remove(elem)
+            elem.parent = None
+
     def get(self, key, default=None):
         return self.attrib.get(key.lower(), default)
 
     def set(self, key, value):
         self.attrib[key.lower()] = value
+
+    def items(self):
+        return list(self.attrib.items())
+
+    def keys(self):
+        return list(self.attrib.keys())
+
+    def values(self):
+        return list(self.attrib.values())
 
     def __iter__(self):
         return iter(self._children)
@@ -46,14 +68,58 @@ class _Element:
             if child.tail:
                 yield child.tail
 
-    def xpath(self, expr):
-        return _evaluate_xpath(self, expr.strip())
+    def xpath(self, expr, namespaces=None, **kwargs):
+        return _evaluate_xpath(self, str(expr).strip())
 
-class _HTMLTreeBuilder(HTMLParser):
-    def __init__(self):
-        super().__init__()
+    def cssselect(self, expr):
+        import cssselect
+        tr = cssselect.GenericTranslator()
+        xpath_expr = tr.css_to_xpath(expr)
+        return self.xpath(xpath_expr)
+
+Element = _Element
+
+class _ElementTree:
+    def __init__(self, element=None, file=None, parser=None):
+        self._root = element
+
+    def getroot(self):
+        return self._root
+
+    def xpath(self, expr, namespaces=None, **kwargs):
+        return self._root.xpath(expr, namespaces=namespaces, **kwargs) if self._root else []
+
+ElementTree = _ElementTree
+
+def SubElement(parent, tag, attrib=None, **extra):
+    attrs = dict(attrib or {})
+    attrs.update(extra)
+    elem = _Element(tag, attrs)
+    parent.append(elem)
+    return elem
+
+def Comment(text=None):
+    elem = _Element("!--")
+    elem.text = text or ""
+    return elem
+
+def ProcessingInstruction(target, text=None):
+    elem = _Element(f"?{target}")
+    elem.text = text or ""
+    return elem
+
+PI = ProcessingInstruction
+
+class XMLParser:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class HTMLParser(_StdHTMLParser):
+    def __init__(self, **kwargs):
+        super().__init__(convert_charrefs=True)
         self.root = None
         self.stack = []
+        self.kwargs = kwargs
 
     def handle_starttag(self, tag, attrs):
         elem = _Element(tag, dict(attrs))
@@ -74,20 +140,32 @@ class _HTMLTreeBuilder(HTMLParser):
         if self.stack:
             self.stack[-1]._text_parts.append(data)
 
-def HTML(text):
+def HTML(text, parser=None):
     if not isinstance(text, str):
         if isinstance(text, bytes):
             text = text.decode("utf-8", errors="ignore")
         else:
             text = str(text or "")
-    parser = _HTMLTreeBuilder()
-    parser.feed(text)
-    return parser.root or _Element("html")
+    if isinstance(parser, type):
+        p = parser()
+    elif isinstance(parser, HTMLParser):
+        p = parser
+    else:
+        p = HTMLParser()
+    p.feed(text)
+    return p.root or _Element("html")
 
-def fromstring(text):
-    return HTML(text)
+def XML(text, parser=None):
+    return HTML(text, parser=parser)
 
-def tostring(element, encoding="utf-8"):
+def fromstring(text, parser=None):
+    return HTML(text, parser=parser)
+
+def tostring(element, encoding="utf-8", pretty_print=False, method="html"):
+    if isinstance(element, _ElementTree):
+        element = element.getroot()
+    if element is None:
+        return b"" if encoding else ""
     def _render(elem):
         attrs = " ".join(f'{k}="{v}"' for k, v in elem.attrib.items())
         attr_str = f" {attrs}" if attrs else ""
@@ -96,13 +174,19 @@ def tostring(element, encoding="utf-8"):
     rendered = _render(element)
     return rendered.encode(encoding) if encoding else rendered
 
+class XPath:
+    def __init__(self, path):
+        self.path = path
+
+    def __call__(self, element):
+        return element.xpath(self.path)
+
 # --- XPath Engine ---
 
 def _evaluate_xpath(node, expr):
     if not expr or not node:
         return []
 
-    # Handle attribute or text extraction on current node
     if expr == "text()" or expr == "./text()":
         return [node.text] if node.text else []
     if expr.startswith("@") or expr.startswith("./@"):
@@ -110,16 +194,13 @@ def _evaluate_xpath(node, expr):
         val = node.get(attr)
         return [val] if val is not None else []
 
-    # Tokenize steps: //div[@class='item'] -> search all descendants
-    is_descendant = expr.startswith("//") or expr.startswith(".//")
-    clean_expr = re.sub(r"^\.?//", "", expr)
-    steps = re.split(r"/(?![\w\s]*\])", clean_expr)
+    is_descendant = expr.startswith("//") or expr.startswith(".//") or "descendant-or-self::" in expr
+    clean_expr = re.sub(r"^(?:\.?//|descendant-or-self::\*/?)", "", expr)
+    steps = [s for s in re.split(r"/(?![\w\s]*\])", clean_expr) if s]
 
     current_nodes = _get_all_descendants(node) if is_descendant else [node]
 
     for step in steps:
-        if not step:
-            continue
         if step == "text()":
             results = []
             for n in current_nodes:
@@ -137,19 +218,19 @@ def _evaluate_xpath(node, expr):
 
         next_nodes = []
         for n in current_nodes:
-            candidates = n._children if not is_descendant else [n]
-            for child in candidates:
-                if _match_step(child, step):
-                    next_nodes.append(child)
+            candidates = [n] if is_descendant else n._children
+            for candidate in candidates:
+                if _match_step(candidate, step):
+                    if candidate not in next_nodes:
+                        next_nodes.append(candidate)
         current_nodes = next_nodes
         is_descendant = False
 
     return current_nodes
 
 def _get_all_descendants(node):
-    nodes = []
+    nodes = [node]
     for child in node._children:
-        nodes.append(child)
         nodes.extend(_get_all_descendants(child))
     return nodes
 
@@ -163,24 +244,20 @@ def _match_step(elem, step):
     if not pred:
         return True
 
-    # [@class='foo'] or [@class="foo"]
     attr_match = re.match(r"@([\w\-]+)\s*=\s*['\"]([^'\"]*)['\"]", pred)
     if attr_match:
         attr_name, attr_val = attr_match.groups()
         return elem.get(attr_name) == attr_val
 
-    # [contains(@class, 'foo')]
     contains_match = re.match(r"contains\(\s*@([\w\-]+)\s*,\s*['\"]([^'\"]*)['\"]\s*\)", pred)
     if contains_match:
         attr_name, substr = contains_match.groups()
         val = elem.get(attr_name) or ""
         return substr in val
 
-    # [@id]
     if pred.startswith("@"):
         return elem.get(pred[1:]) is not None
 
-    # [1] (1-based index)
     if pred.isdigit():
         idx = int(pred)
         if elem.parent:

@@ -841,8 +841,7 @@ except ImportError:
     pass
 try:
     from . import _lxml
-
     register_treebuilders_from(_lxml)
-except ImportError:
-    # They don't have lxml installed.
+except Exception:
+    # lxml C-extension not available or using pure python
     pass

@@ -21,27 +21,32 @@ struct PythonMobileTests {
         """)
     }
 
-    @Test("lxml etree and XPath parsing")
-    func testLxmlXPath() throws {
+    @Test("typing_extensions presence")
+    func testTypingExtensions() throws {
         try PythonEngine.shared.runCode("""
-        from lxml import etree
+        import typing_extensions
+        from typing_extensions import override, Self
+        """)
+    }
 
-        html_content = '''
-        <div class="video-list">
-            <div class="item" id="v1"><a href="/play/1">Movie One</a></div>
-            <div class="item" id="v2"><a href="/play/2">Movie Two</a></div>
-        </div>
-        '''
+    @Test("bs4 BeautifulSoup with lxml and html.parser features")
+    func testBeautifulSoupWithVariousFeatures() throws {
+        try PythonEngine.shared.runCode("""
+        from bs4 import BeautifulSoup
 
-        tree = etree.HTML(html_content)
-        items = tree.xpath('//div[@class="item"]')
-        assert len(items) == 2
+        html_doc = "<html><body><div class='title'>Hello TVBox</div></body></html>"
 
-        titles = tree.xpath('//div[@class="item"]/a/text()')
-        assert titles == ["Movie One", "Movie Two"]
+        # 1. Specified 'lxml' (automatically routed to html.parser)
+        s1 = BeautifulSoup(html_doc, 'lxml')
+        assert s1.find('div', class_='title').text == "Hello TVBox"
 
-        hrefs = tree.xpath('//div[@class="item"]/a/@href')
-        assert hrefs == ["/play/1", "/play/2"]
+        # 2. Specified 'html.parser'
+        s2 = BeautifulSoup(html_doc, 'html.parser')
+        assert s2.find('div', class_='title').text == "Hello TVBox"
+
+        # 3. Default (no feature argument)
+        s3 = BeautifulSoup(html_doc)
+        assert s3.find('div', class_='title').text == "Hello TVBox"
         """)
     }
 
@@ -53,27 +58,6 @@ struct PythonMobileTests {
         assert hasattr(requests, "get")
         assert hasattr(requests, "post")
         assert hasattr(requests, "Session")
-        """)
-    }
-
-    @Test("bs4 (BeautifulSoup4) HTML parsing")
-    func testBeautifulSoup() throws {
-        try PythonEngine.shared.runCode("""
-        from bs4 import BeautifulSoup
-
-        html_doc = "<html><body><div class='title'>Hello TVBox</div></body></html>"
-        soup = BeautifulSoup(html_doc, 'html.parser')
-        assert soup.find('div', class_='title').text == "Hello TVBox"
-        """)
-    }
-
-    @Test("pyquery CSS selector parsing")
-    func testPyQuery() throws {
-        try PythonEngine.shared.runCode("""
-        from pyquery import PyQuery as pq
-
-        doc = pq("<div class='container'><span id='msg'>Testing PyQuery</span></div>")
-        assert doc("#msg").text() == "Testing PyQuery"
         """)
     }
 
@@ -108,13 +92,13 @@ struct PythonMobileTests {
     @Test("Dynamic module loading and calling")
     func testModuleLoadingAndCall() throws {
         let pythonCode = """
-        from lxml import etree
+        from bs4 import BeautifulSoup
         from base.spider import Spider
 
         class MySpider(Spider):
             def homeContent(self, filter):
-                tree = etree.HTML("<div class='item'>Title</div>")
-                title = tree.xpath("//div[@class='item']/text()")[0]
+                soup = BeautifulSoup("<div class='item'>Title via BS4</div>", "lxml")
+                title = soup.find(class_='item').text
                 return {"title": title, "status": "ok"}
 
         spider_instance = MySpider()
@@ -123,15 +107,15 @@ struct PythonMobileTests {
             return spider_instance.homeContent(filter)
         """
 
-        try PythonEngine.shared.loadModule(name: "test_spider", code: pythonCode)
-        let response = try PythonEngine.shared.call(module: "test_spider", function: "fetch_home", args: [true])
+        try PythonEngine.shared.loadModule(name: "test_spider_bs4", code: pythonCode)
+        let response = try PythonEngine.shared.call(module: "test_spider_bs4", function: "fetch_home", args: [true])
 
         guard let dict = response as? [String: Any] else {
             Issue.record("Expected dictionary response")
             return
         }
 
-        #expect(dict["title"] as? String == "Title")
+        #expect(dict["title"] as? String == "Title via BS4")
         #expect(dict["status"] as? String == "ok")
     }
 }

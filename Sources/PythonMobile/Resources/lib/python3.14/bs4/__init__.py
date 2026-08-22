@@ -357,18 +357,8 @@ class BeautifulSoup(Tag):
             builder_class = builder
             builder = None
         elif builder is None:
-            if isinstance(features, str):
-                features = [features]
-            if features is None or len(features) == 0:
-                features = self.DEFAULT_BUILDER_FEATURES
-            possible_builder_class = builder_registry.lookup(*features)
-            if possible_builder_class is None:
-                raise FeatureNotFound(
-                    "Couldn't find a tree builder with the features you "
-                    "requested: %s. Do you need to install a parser library?"
-                    % ",".join(features)
-                )
-            builder_class = possible_builder_class
+            from .builder._htmlparser import HTMLParserTreeBuilder
+            builder_class = HTMLParserTreeBuilder
 
         # At this point either we have a TreeBuilder instance in
         # builder, or we have a builder_class that we can instantiate

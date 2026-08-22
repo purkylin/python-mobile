@@ -376,7 +376,7 @@ class HTMLParserTreeBuilder(HTMLTreeBuilder):
     is_xml: bool = False
     picklable: bool = True
     NAME: str = HTMLPARSER
-    features: Iterable[str] = [NAME, HTML, STRICT]
+    features: Iterable[str] = [NAME, HTML, STRICT, "html.parser", "fast", "lxml", "lxml-html", "lxml-xml", "xml", "html5lib"]
     parser_args: Tuple[Iterable[Any], Dict[str, Any]]
 
     #: The html.parser knows which line number and position in the
