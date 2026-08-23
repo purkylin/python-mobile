@@ -118,4 +118,54 @@ struct PythonMobileTests {
         #expect(dict["title"] as? String == "Title via BS4")
         #expect(dict["status"] as? String == "ok")
     }
+
+    @Test("Spider runner envelope")
+    func testSpiderRunnerEnvelope() throws {
+        let key = "python_mobile_runner_test"
+        let source = """
+        from base.spider import Spider as BaseSpider
+
+        class Spider(BaseSpider):
+            def homeContent(self, filter=True):
+                return {"ok": True, "items": [1, 2, 3]}
+        """
+
+        let initialized = try PythonEngine.shared.call(
+            module: "spider_runner",
+            function: "init_spider",
+            args: [key, source, ""]
+        ) as? [String: Any]
+
+        #expect(initialized?["ok"] as? Bool == true)
+
+        let response = try PythonEngine.shared.call(
+            module: "spider_runner",
+            function: "call_spider",
+            args: [key, "homeContent", [true]]
+        ) as? [String: Any]
+
+        #expect(response?["ok"] as? Bool == true)
+        let value = response?["value"] as? [String: Any]
+        #expect(value?["ok"] as? Bool == true)
+        #expect(value?["items"] as? [Int] == [1, 2, 3])
+    }
+
+    @Test("Requests response JSON decoding")
+    func testRequestsResponseJSONDecoding() throws {
+        let source = """
+        import requests
+
+        def decode_response():
+            response = requests.Response(b'{"status": "ok"}', 200, {})
+            return response.json()
+        """
+
+        try PythonEngine.shared.loadModule(name: "python_mobile_requests_test", code: source)
+        let response = try PythonEngine.shared.call(
+            module: "python_mobile_requests_test",
+            function: "decode_response"
+        ) as? [String: Any]
+
+        #expect(response?["status"] as? String == "ok")
+    }
 }

@@ -1,10 +1,13 @@
-# requests/__init__.py
-import urllib.request
-import urllib.parse
-import json
+import base64
+import json as json_module
 import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
+
 from . import exceptions
 from .exceptions import *
+
 
 class _Codes:
     ok = 200
@@ -17,16 +20,31 @@ class _Codes:
     not_found = 404
     internal_server_error = 500
 
+
 codes = _Codes()
+
+
+def _extract_cookies(headers):
+    cookies = {}
+    values = headers.get("Set-Cookie") or headers.get("set-cookie") or ""
+    for value in values.split(","):
+        pair = value.split(";", 1)[0].strip()
+        if "=" in pair:
+            key, item = pair.split("=", 1)
+            cookies[key.strip()] = item.strip()
+    return cookies
+
 
 class Response:
     def __init__(self, content_bytes, status_code, headers, url=""):
         self.content = content_bytes or b""
         self.status_code = status_code
+        self.status = status_code
         self.headers = headers or {}
         self.url = url
         self.encoding = "utf-8"
-        self.cookies = {}
+        self.cookies = _extract_cookies(self.headers)
+        self.reason = self.headers.get("Reason", "")
 
     @property
     def ok(self):
@@ -39,12 +57,36 @@ class Response:
         except Exception:
             return self.content.decode("utf-8", errors="ignore")
 
+    @property
+    def apparent_encoding(self):
+        content_type = ""
+        for key, value in self.headers.items():
+            if str(key).lower() == "content-type":
+                content_type = str(value)
+                break
+
+        marker = "charset="
+        lowered = content_type.lower()
+        if marker in lowered:
+            value = content_type[lowered.index(marker) + len(marker):]
+            return value.split(";", 1)[0].strip().strip('"\'') or "utf-8"
+
+        try:
+            self.content.decode("utf-8")
+            return "utf-8"
+        except UnicodeDecodeError:
+            return "gb18030"
+
     def json(self, **kwargs):
-        return json.loads(self.text, **kwargs)
+        return json_module.loads(self.text, **kwargs)
 
     def raise_for_status(self):
         if 400 <= self.status_code < 600:
-            raise exceptions.HTTPError(f"HTTP {self.status_code} Error for url: {self.url}", response=self)
+            raise exceptions.HTTPError(
+                f"HTTP {self.status_code} Error for url: {self.url}",
+                response=self
+            )
+
 
 class Session:
     def __init__(self):
@@ -69,70 +111,130 @@ class Session:
         return self.request("DELETE", url, **kwargs)
 
     def request(self, method, url, params=None, data=None, json=None, headers=None, cookies=None, timeout=15, **kwargs):
-        req_headers = dict(self.headers)
+        request_headers = dict(self.headers)
         if headers:
-            for k, v in headers.items():
-                req_headers[k] = str(v)
+            request_headers.update({key: str(value) for key, value in headers.items()})
 
         if params:
-            if isinstance(params, dict):
-                query = urllib.parse.urlencode(params)
-            else:
-                query = str(params)
-            sep = "&" if "?" in url else "?"
-            url = f"{url}{sep}{query}"
+            query = urllib.parse.urlencode(params, doseq=True) if not isinstance(params, str) else params
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{query}"
 
         all_cookies = dict(self.cookies)
         if cookies:
             all_cookies.update(cookies)
         if all_cookies:
-            req_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in all_cookies.items())
+            request_headers["Cookie"] = "; ".join(
+                f"{key}={value}" for key, value in all_cookies.items()
+            )
 
         body = None
         if json is not None:
-            body = json.dumps(json).encode("utf-8")
-            if "Content-Type" not in req_headers and "content-type" not in req_headers:
-                req_headers["Content-Type"] = "application/json"
+            body = json_module.dumps(json, ensure_ascii=False).encode("utf-8")
+            if not any(key.lower() == "content-type" for key in request_headers):
+                request_headers["Content-Type"] = "application/json"
         elif data is not None:
             if isinstance(data, dict):
-                body = urllib.parse.urlencode(data).encode("utf-8")
-                if "Content-Type" not in req_headers and "content-type" not in req_headers:
-                    req_headers["Content-Type"] = "application/x-www-form-urlencoded"
+                body = urllib.parse.urlencode(data, doseq=True).encode("utf-8")
+                if not any(key.lower() == "content-type" for key in request_headers):
+                    request_headers["Content-Type"] = "application/x-www-form-urlencoded"
             elif isinstance(data, str):
                 body = data.encode("utf-8")
             else:
                 body = data
 
-        req = urllib.request.Request(url, data=body, headers=req_headers, method=method.upper())
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            request_timeout = 15 if timeout is None else float(timeout)
+        except (TypeError, ValueError):
+            request_timeout = 15
+        request_timeout = max(0.1, min(request_timeout, 15))
+
+        verify = kwargs.get("verify", True)
+        context = ssl.create_default_context()
+        if verify is False:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+
+        native_request = None
+        try:
+            from _tvbox_http import request as native_request
+        except ImportError:
+            pass
+
+        if native_request is not None and verify is not False:
+            payload = {
+                "method": method.upper(),
+                "url": url,
+                "headers": request_headers,
+                "body": base64.b64encode(body or b"").decode("ascii"),
+                "timeout": timeout
+            }
+            native_response = json_module.loads(
+                native_request(json_module.dumps(payload, ensure_ascii=False))
+            )
+            if not native_response.get("ok"):
+                raise exceptions.RequestException(native_response.get("error", "HTTP request failed"))
+
+            result = Response(
+                base64.b64decode(native_response.get("body", "")),
+                native_response.get("status_code", 0),
+                native_response.get("headers", {}),
+                url=native_response.get("url", url)
+            )
+            self.cookies.update(result.cookies)
+            return result
+
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers=request_headers,
+            method=method.upper()
+        )
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-                resp_headers = dict(resp.headers)
-                return Response(resp.read(), resp.status, resp_headers, url=url)
-        except urllib.error.HTTPError as e:
-            return Response(e.read(), e.code, dict(e.headers), url=url)
-        except Exception as e:
-            raise exceptions.RequestException(str(e))
+            with urllib.request.urlopen(request, timeout=request_timeout, context=context) as response:
+                result = Response(
+                    response.read(),
+                    response.status,
+                    dict(response.headers),
+                    url=response.geturl()
+                )
+        except urllib.error.HTTPError as error:
+            result = Response(
+                error.read(),
+                error.code,
+                dict(error.headers),
+                url=url
+            )
+        except Exception as error:
+            raise exceptions.RequestException(str(error))
+
+        self.cookies.update(result.cookies)
+        return result
+
 
 _default_session = Session()
+
 
 def get(url, **kwargs):
     return _default_session.get(url, **kwargs)
 
+
 def post(url, **kwargs):
     return _default_session.post(url, **kwargs)
+
 
 def head(url, **kwargs):
     return _default_session.head(url, **kwargs)
 
+
 def put(url, **kwargs):
     return _default_session.put(url, **kwargs)
 
+
 def delete(url, **kwargs):
     return _default_session.delete(url, **kwargs)
+
 
 def request(method, url, **kwargs):
     return _default_session.request(method, url, **kwargs)

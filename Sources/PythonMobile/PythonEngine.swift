@@ -11,7 +11,9 @@ public final class PythonEngine: @unchecked Sendable {
 
     /// Initializes the embedded Python runtime inside the sandbox.
     public func ensureInitialized() throws {
-        lock.lock()
+        guard lock.try() else {
+            throw PythonError.executionFailed("Python runtime is busy")
+        }
         defer { lock.unlock() }
 
         guard !isInitialized else { return }
@@ -63,6 +65,8 @@ public final class PythonEngine: @unchecked Sendable {
         warnings.filterwarnings("ignore", category=SyntaxWarning)
         """)
 
+        TVBoxHTTPBridge.install()
+        _ = PyEval_SaveThread()
         isInitialized = true
     }
 
@@ -70,7 +74,9 @@ public final class PythonEngine: @unchecked Sendable {
     public func runCode(_ code: String) throws {
         try ensureInitialized()
 
-        lock.lock()
+        guard lock.try() else {
+            throw PythonError.executionFailed("Python runtime is busy")
+        }
         defer { lock.unlock() }
 
         let gstate = PyGILState_Ensure()
@@ -85,7 +91,9 @@ public final class PythonEngine: @unchecked Sendable {
     public func eval(_ expression: String) throws -> String {
         try ensureInitialized()
 
-        lock.lock()
+        guard lock.try() else {
+            throw PythonError.executionFailed("Python runtime is busy")
+        }
         defer { lock.unlock() }
 
         let gstate = PyGILState_Ensure()
@@ -105,7 +113,9 @@ public final class PythonEngine: @unchecked Sendable {
     public func loadModule(name: String, code: String) throws {
         try ensureInitialized()
 
-        lock.lock()
+        guard lock.try() else {
+            throw PythonError.executionFailed("Python runtime is busy")
+        }
         defer { lock.unlock() }
 
         let gstate = PyGILState_Ensure()
@@ -132,13 +142,18 @@ public final class PythonEngine: @unchecked Sendable {
 
     /// Calls a function in a loaded module with Base64 encoded JSON parameters.
     public func call(module: String, function: String, args: [Any] = []) throws -> Any? {
+        print("[PythonMobile] call begin \(module).\(function)")
         try ensureInitialized()
 
-        lock.lock()
+        guard lock.try() else {
+            print("[PythonMobile] call rejected: runtime busy")
+            throw PythonError.executionFailed("Python runtime is busy")
+        }
         defer { lock.unlock() }
 
         let gstate = PyGILState_Ensure()
         defer { PyGILState_Release(gstate) }
+        print("[PythonMobile] GIL acquired \(module).\(function)")
 
         let argsData = (try? JSONSerialization.data(withJSONObject: args)) ?? Data("[]".utf8)
         let modB64 = Data(module.utf8).base64EncodedString()
@@ -183,7 +198,9 @@ public final class PythonEngine: @unchecked Sendable {
                     __result__ = json.dumps({"__error__": str(e), "__traceback__": traceback.format_exc()})
         """
 
+        print("[PythonMobile] executing \(module).\(function)")
         let resultString = try executeStatementAndGetResult(script)
+        print("[PythonMobile] call complete \(module).\(function)")
         if let data = resultString.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) {
             if let dict = json as? [String: Any], let error = dict["__error__"] as? String {
@@ -199,7 +216,9 @@ public final class PythonEngine: @unchecked Sendable {
     public func addModulePath(_ path: String) throws {
         try ensureInitialized()
 
-        lock.lock()
+        guard lock.try() else {
+            throw PythonError.executionFailed("Python runtime is busy")
+        }
         defer { lock.unlock() }
 
         let pathB64 = Data(path.utf8).base64EncodedString()
