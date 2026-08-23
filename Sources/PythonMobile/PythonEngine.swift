@@ -66,6 +66,7 @@ public final class PythonEngine: @unchecked Sendable {
         """)
 
         TVBoxHTTPBridge.install()
+        TVBoxNativeBridge.install()
         _ = PyEval_SaveThread()
         isInitialized = true
     }

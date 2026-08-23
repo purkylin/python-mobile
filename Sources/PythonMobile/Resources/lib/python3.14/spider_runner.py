@@ -1,4 +1,5 @@
 import sys
+import re
 import json
 import types
 import traceback
@@ -49,7 +50,19 @@ def init_spider(site_key, script_content, ext_param=""):
             return _failure("ConfigurationError", f"Module {module_name} has no Spider class")
 
         spider = spider_cls()
+        spider.site_key = site_key
         _log(f"[spider_runner] instance created site={site_key}")
+
+        # Inject standard BaseSpider helper methods if missing on custom Spider class
+        from base.spider import Spider as BaseSpider
+        for attr_name in dir(BaseSpider):
+            if not attr_name.startswith("__") and not hasattr(spider, attr_name):
+                base_val = getattr(BaseSpider, attr_name)
+                if callable(base_val):
+                    setattr(spider, attr_name, types.MethodType(base_val, spider))
+                else:
+                    setattr(spider, attr_name, base_val)
+
         if hasattr(spider, "init"):
             _log(f"[spider_runner] init method start site={site_key}")
             spider.init(ext_param or "")
@@ -70,6 +83,11 @@ def call_spider(site_key, method, args=None):
             return _failure("SessionError", f"Spider for site '{site_key}' is not initialized")
 
         func = getattr(spider, method, None)
+        if func is None or not callable(func):
+            # Fallback to snake_case method lookup
+            snake_name = re.sub(r'(?<!^)(?=[A-Z])', '_', method).lower()
+            func = getattr(spider, snake_name, None)
+
         if func is None or not callable(func):
             return _failure("MethodError", f"Method '{method}' not found on spider '{site_key}'")
 
@@ -98,5 +116,6 @@ def destroy_spider(site_key):
     removed = _spiders.pop(site_key, None) is not None
     sys.modules.pop(f"spider_{site_key}", None)
     return _success(removed)
+
 
 

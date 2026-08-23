@@ -168,4 +168,52 @@ struct PythonMobileTests {
 
         #expect(response?["status"] as? String == "ok")
     }
+
+    @Test("Spider Native Cache and utilities")
+    func testSpiderNativeCacheAndUtilities() throws {
+        let key = "python_mobile_cache_test"
+        let source = """
+        from base.spider import Spider
+
+        class Spider(Spider):
+            def test_cache_and_utils(self):
+                self.setCache("test_token", {"token": "abc123xyz", "expiresAt": 9999999999})
+                cached = self.getCache("test_token")
+                cleaned = self.cleanText(" <div>Hello <b>World</b> &amp; TVBox </div> ")
+                is_video = self.isVideoFormat("https://example.com/play/video.m3u8?token=123")
+                proxy_url = self.getProxyUrl()
+                return {
+                    "cached": cached,
+                    "cleaned": cleaned,
+                    "is_video": is_video,
+                    "proxy_url": proxy_url
+                }
+        """
+
+        let initialized = try PythonEngine.shared.call(
+            module: "spider_runner",
+            function: "init_spider",
+            args: [key, source, ""]
+        ) as? [String: Any]
+        #expect(initialized?["ok"] as? Bool == true)
+
+        let response = try PythonEngine.shared.call(
+            module: "spider_runner",
+            function: "call_spider",
+            args: [key, "test_cache_and_utils", []]
+        ) as? [String: Any]
+        #expect(response?["ok"] as? Bool == true)
+
+        guard let value = response?["value"] as? [String: Any] else {
+            Issue.record("Expected dictionary response")
+            return
+        }
+
+        let cached = value["cached"] as? [String: Any]
+        #expect(cached?["token"] as? String == "abc123xyz")
+        #expect(value["cleaned"] as? String == "Hello World & TVBox")
+        #expect(value["is_video"] as? Bool == true)
+        #expect((value["proxy_url"] as? String)?.contains("proxy?do=py") == true)
+    }
 }
+
