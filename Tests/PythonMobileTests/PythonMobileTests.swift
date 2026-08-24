@@ -54,10 +54,14 @@ struct PythonMobileTests {
     func testRequests() throws {
         try PythonEngine.shared.runCode("""
         import requests
+        from requests.adapters import HTTPAdapter
         assert requests.codes.ok == 200
         assert hasattr(requests, "get")
         assert hasattr(requests, "post")
         assert hasattr(requests, "Session")
+        session = requests.Session()
+        session.mount("https://", HTTPAdapter(max_retries=2))
+        assert session.adapters["https://"].max_retries == 0
         """)
     }
 
@@ -78,6 +82,66 @@ struct PythonMobileTests {
         decrypted = unpad(decipher.decrypt(ciphertext), 16)
 
         assert decrypted == plaintext
+
+        standard_key = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
+        standard_plaintext = bytes.fromhex("00112233445566778899aabbccddeeff")
+        standard_ciphertext = bytes.fromhex("69c4e0d86a7b0430d8cdb78070b4c55a")
+        assert AES.new(standard_key, AES.MODE_ECB).encrypt(standard_plaintext) == standard_ciphertext
+        assert AES.new(standard_key, AES.MODE_ECB).decrypt(standard_ciphertext) == standard_plaintext
+        """)
+    }
+
+    @Test("Crypto ARC4 compatibility")
+    func testCryptoARC4() throws {
+        try PythonEngine.shared.runCode("""
+        from Crypto.Cipher import ARC4
+
+        encrypted = ARC4.new(b"Key").encrypt(b"Plaintext")
+        assert encrypted.hex() == "bbf316e8d940af0ad3"
+        assert ARC4.new(b"Key").decrypt(encrypted) == b"Plaintext"
+        """)
+    }
+
+    @Test("Crypto RSA PKCS1 v1.5 compatibility")
+    func testCryptoRSA() throws {
+        try PythonEngine.shared.runCode("""
+        import base64
+        from Crypto.Hash import SHA256
+        from Crypto.PublicKey import RSA
+        from Crypto.Cipher import PKCS1_v1_5
+        from Crypto.Signature import pkcs1_15
+
+        public_der = base64.b64decode(
+            "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCoYt0BP77U+DM08BiI/QbSRIfxijXo85BTPqIM1Ow8BNwhLETzRIZ+dEwdWDbydG/PspgBAfRpGaYVdJYtvaC2JnoO8+Ik6qMWojfEJxSFLa0Pb0A892tun4gsxoEMjcreZ+YGyaBxAfqX0BSMfdrOgIYaZQjYrw9TRLlUT31QoQIDAQAB"
+        )
+        key = RSA.import_key(public_der)
+        encrypted = PKCS1_v1_5.new(key).encrypt(b"TVBox")
+        assert len(encrypted) == key.size_in_bytes()
+        assert callable(pkcs1_15.new)
+        assert SHA256.new(b"TVBox").oid == "2.16.840.1.101.3.4.2.1"
+        """)
+    }
+
+    @Test("Legacy Spider receives BaseSpider instance state")
+    func testLegacySpiderStateInjection() throws {
+        try PythonEngine.shared.runCode("""
+        import spider_runner
+
+        script = '''
+        class Spider:
+            def init(self, extend=''):
+                pass
+
+            def categoryContent(self, tid, pg, filter, extend):
+                return {'list': [{'vod_id': self.header['User-Agent']}], 'page': pg}
+        '''
+        initialized = spider_runner.init_spider("legacy-state-test", script)
+        assert initialized["ok"]
+        response = spider_runner.call_spider(
+            "legacy-state-test", "categoryContent", ["tv", "1", False, {}]
+        )
+        assert response["ok"]
+        assert response["value"]["list"][0]["vod_id"]
         """)
     }
 
@@ -216,4 +280,3 @@ struct PythonMobileTests {
         #expect((value["proxy_url"] as? String)?.contains("proxy?do=py") == true)
     }
 }
-

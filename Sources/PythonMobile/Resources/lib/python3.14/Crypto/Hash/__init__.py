@@ -1,5 +1,14 @@
 import hashlib, hmac
 
+_OIDS = {
+    "md5": "1.2.840.113549.2.5",
+    "sha1": "1.3.14.3.2.26",
+    "sha224": "2.16.840.1.101.3.4.2.4",
+    "sha256": "2.16.840.1.101.3.4.2.1",
+    "sha384": "2.16.840.1.101.3.4.2.2",
+    "sha512": "2.16.840.1.101.3.4.2.3",
+}
+
 class _HashWrapper:
     def __init__(self, h):
         self._h = h
@@ -20,6 +29,14 @@ class _HashWrapper:
         return _HashWrapper(self._h.copy())
 
     @property
+    def name(self):
+        return self._h.name.lower()
+
+    @property
+    def oid(self):
+        return _OIDS.get(self.name)
+
+    @property
     def digest_size(self):
         return self._h.digest_size
 
@@ -30,6 +47,7 @@ class _HashWrapper:
 class _HashModule:
     def __init__(self, name):
         self.name = name
+        self.oid = _OIDS.get(name.lower())
 
     def new(self, data=b""):
         if isinstance(data, str):

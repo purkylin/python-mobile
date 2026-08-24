@@ -29,6 +29,37 @@ def _failure(error_type, message):
     }
 
 
+def _begin_request_scope():
+    try:
+        import requests
+        requests._begin_request_scope()
+    except Exception:
+        pass
+
+
+def _consume_request_error():
+    try:
+        import requests
+        return requests._consume_transport_error()
+    except Exception:
+        return None
+
+
+def _is_empty_content(method, result):
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except Exception:
+            return not result
+    if not isinstance(result, dict):
+        return not result
+    if method in ("homeContent", "homeVideoContent"):
+        return not result.get("class") and not result.get("list")
+    if method in ("categoryContent", "detailContent", "searchContent"):
+        return not result.get("list")
+    return False
+
+
 def sanitize_script(script):
     return script
 
@@ -53,8 +84,13 @@ def init_spider(site_key, script_content, ext_param=""):
         spider.site_key = site_key
         _log(f"[spider_runner] instance created site={site_key}")
 
-        # Inject standard BaseSpider helper methods if missing on custom Spider class
+        # Inject standard BaseSpider state and helper methods when legacy spiders
+        # do not inherit from BaseSpider or call super().__init__().
         from base.spider import Spider as BaseSpider
+        base_spider = BaseSpider()
+        for attr_name, attr_value in vars(base_spider).items():
+            if not hasattr(spider, attr_name):
+                setattr(spider, attr_name, attr_value)
         for attr_name in dir(BaseSpider):
             if not attr_name.startswith("__") and not hasattr(spider, attr_name):
                 base_val = getattr(BaseSpider, attr_name)
@@ -78,6 +114,7 @@ def init_spider(site_key, script_content, ext_param=""):
 def call_spider(site_key, method, args=None):
     _log(f"[spider_runner] call start site={site_key} method={method}")
     try:
+        _begin_request_scope()
         spider = _spiders.get(site_key)
         if spider is None:
             return _failure("SessionError", f"Spider for site '{site_key}' is not initialized")
@@ -106,6 +143,10 @@ def call_spider(site_key, method, args=None):
         else:
             result = func(args)
 
+        request_error = _consume_request_error()
+        if request_error and _is_empty_content(method, result):
+            return _failure("RequestException", request_error)
+
         _log(f"[spider_runner] call complete site={site_key} method={method}")
         return _success(result)
     except Exception as error:
@@ -116,6 +157,3 @@ def destroy_spider(site_key):
     removed = _spiders.pop(site_key, None) is not None
     sys.modules.pop(f"spider_{site_key}", None)
     return _success(removed)
-
-
-

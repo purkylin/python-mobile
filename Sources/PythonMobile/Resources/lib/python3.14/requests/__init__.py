@@ -22,6 +22,55 @@ class _Codes:
 
 
 codes = _Codes()
+_last_transport_error = None
+
+
+def _begin_request_scope():
+    global _last_transport_error
+    _last_transport_error = None
+
+
+def _consume_transport_error():
+    global _last_transport_error
+    error = _last_transport_error
+    _last_transport_error = None
+    return error
+
+
+def _response_error_message(response):
+    code = response.status_code
+    if 200 <= code < 300:
+        return None
+    if code == 403:
+        return f"Auth Failed (HTTP 403) for url: {response.url}"
+    if code == 404:
+        return f"Not Found (HTTP 404) for url: {response.url}"
+    if code == 429:
+        return f"Access Limit Exceeded (HTTP 429) for url: {response.url}"
+
+    message = None
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            message = payload.get("message") or payload.get("msg")
+            if not message and isinstance(error, dict):
+                message = error.get("message")
+            elif not message and isinstance(error, str):
+                message = error
+    except Exception:
+        pass
+
+    suffix = f": {str(message).strip()}" if message else ""
+    return f"Server Error (HTTP {code}){suffix} for url: {response.url}"
+
+
+class RequestsCookieJar(dict):
+    def get_dict(self):
+        return dict(self)
+
+    def set(self, key, value, domain=None, path="/"):
+        self[str(key)] = str(value)
 
 
 def _extract_cookies(headers):
@@ -48,7 +97,7 @@ class Response:
 
     @property
     def ok(self):
-        return 200 <= self.status_code < 400
+        return 200 <= self.status_code < 300
 
     @property
     def text(self):
@@ -81,11 +130,11 @@ class Response:
         return json_module.loads(self.text, **kwargs)
 
     def raise_for_status(self):
-        if 400 <= self.status_code < 600:
-            raise exceptions.HTTPError(
-                f"HTTP {self.status_code} Error for url: {self.url}",
-                response=self
-            )
+        message = _response_error_message(self)
+        if message:
+            global _last_transport_error
+            _last_transport_error = message
+            raise exceptions.HTTPError(message, response=self)
 
 
 class Session:
@@ -93,7 +142,15 @@ class Session:
         self.headers = {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15"
         }
-        self.cookies = {}
+        self.cookies = RequestsCookieJar()
+        self.verify = True
+        self.adapters = {}
+
+    def mount(self, prefix, adapter):
+        self.adapters[prefix] = adapter
+
+    def close(self):
+        pass
 
     def get(self, url, **kwargs):
         return self.request("GET", url, **kwargs)
@@ -149,7 +206,7 @@ class Session:
             request_timeout = 15
         request_timeout = max(0.1, min(request_timeout, 15))
 
-        verify = kwargs.get("verify", True)
+        verify = kwargs.get("verify", self.verify)
         context = ssl.create_default_context()
         if verify is False:
             context.check_hostname = False
@@ -173,7 +230,10 @@ class Session:
                 native_request(json_module.dumps(payload, ensure_ascii=False))
             )
             if not native_response.get("ok"):
-                raise exceptions.RequestException(native_response.get("error", "HTTP request failed"))
+                message = native_response.get("error", "HTTP request failed")
+                global _last_transport_error
+                _last_transport_error = message
+                raise exceptions.RequestException(message)
 
             result = Response(
                 base64.b64decode(native_response.get("body", "")),
@@ -181,6 +241,9 @@ class Session:
                 native_response.get("headers", {}),
                 url=native_response.get("url", url)
             )
+            _last_transport_error = _response_error_message(result)
+            if _last_transport_error:
+                raise exceptions.HTTPError(_last_transport_error, response=result)
             self.cookies.update(result.cookies)
             return result
 
@@ -207,8 +270,12 @@ class Session:
                 url=url
             )
         except Exception as error:
+            _last_transport_error = str(error)
             raise exceptions.RequestException(str(error))
 
+        _last_transport_error = _response_error_message(result)
+        if _last_transport_error:
+            raise exceptions.HTTPError(_last_transport_error, response=result)
         self.cookies.update(result.cookies)
         return result
 

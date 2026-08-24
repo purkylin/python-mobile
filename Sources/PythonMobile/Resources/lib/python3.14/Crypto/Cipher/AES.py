@@ -62,7 +62,26 @@ _rcon = [
 ]
 
 def _xtime(a):
-    return ((a << 1) ^ 0x1b) if (a & 0x80) else (a << 1)
+    doubled = (a << 1) & 0xff
+    return doubled ^ 0x1b if (a & 0x80) else doubled
+
+def _multiply(a, b):
+    result = 0
+    while b:
+        if b & 1:
+            result ^= a
+        a = _xtime(a)
+        b >>= 1
+    return result
+
+def _inverse_mix_column(column):
+    a, b, c, d = column
+    return [
+        _multiply(a, 14) ^ _multiply(b, 11) ^ _multiply(c, 13) ^ _multiply(d, 9),
+        _multiply(a, 9) ^ _multiply(b, 14) ^ _multiply(c, 11) ^ _multiply(d, 13),
+        _multiply(a, 13) ^ _multiply(b, 9) ^ _multiply(c, 14) ^ _multiply(d, 11),
+        _multiply(a, 11) ^ _multiply(b, 13) ^ _multiply(c, 9) ^ _multiply(d, 14),
+    ]
 
 class _AESCipher:
     def __init__(self, key, mode=MODE_ECB, iv=None, counter=None):
@@ -184,82 +203,17 @@ class _AESCipher:
             state[i] ^= rk[i]
 
         for r in range(self.nr - 1, 0, -1):
-            s0 = _rsbox[state[0]]
-            s4 = _rsbox[state[4]]
-            s8 = _rsbox[state[8]]
-            s12 = _rsbox[state[12]]
-
-            s1 = _rsbox[state[13]]
-            s5 = _rsbox[state[1]]
-            s9 = _rsbox[state[5]]
-            s13 = _rsbox[state[9]]
-
-            s2 = _rsbox[state[10]]
-            s6 = _rsbox[state[14]]
-            s10 = _rsbox[state[2]]
-            s14 = _rsbox[state[6]]
-
-            s3 = _rsbox[state[7]]
-            s7 = _rsbox[state[11]]
-            s11 = _rsbox[state[15]]
-            s15 = _rsbox[state[3]]
-
+            shifted = [
+                state[0], state[13], state[10], state[7],
+                state[4], state[1], state[14], state[11],
+                state[8], state[5], state[2], state[15],
+                state[12], state[9], state[6], state[3],
+            ]
             rk = self.round_keys[r]
-            u0 = s0 ^ rk[0]
-            u1 = s1 ^ rk[1]
-            u2 = s2 ^ rk[2]
-            u3 = s3 ^ rk[3]
-            t = _xtime(_xtime(u0 ^ u2)) ^ _xtime(_xtime(u1 ^ u3))
-            v0 = u0 ^ t
-            v1 = u1 ^ t
-            v2 = u2 ^ t
-            v3 = u3 ^ t
-            state[0] = _xtime(v0 ^ v1) ^ v1 ^ v2 ^ v3
-            state[1] = _xtime(v1 ^ v2) ^ v2 ^ v3 ^ v0
-            state[2] = _xtime(v2 ^ v3) ^ v3 ^ v0 ^ v1
-            state[3] = _xtime(v3 ^ v0) ^ v0 ^ v1 ^ v2
-
-            u4 = s4 ^ rk[4]
-            u5 = s5 ^ rk[5]
-            u6 = s6 ^ rk[6]
-            u7 = s7 ^ rk[7]
-            t = _xtime(_xtime(u4 ^ u6)) ^ _xtime(_xtime(u5 ^ u7))
-            v4 = u4 ^ t
-            v5 = u5 ^ t
-            v6 = u6 ^ t
-            v7 = u7 ^ t
-            state[4] = _xtime(v4 ^ v5) ^ v5 ^ v6 ^ v7
-            state[5] = _xtime(v5 ^ v6) ^ v6 ^ v7 ^ v4
-            state[6] = _xtime(v6 ^ v7) ^ v7 ^ v4 ^ v5
-            state[7] = _xtime(v7 ^ v4) ^ v4 ^ v5 ^ v6
-
-            u8 = s8 ^ rk[8]
-            u9 = s9 ^ rk[9]
-            u10 = s10 ^ rk[10]
-            u11 = s11 ^ rk[11]
-            t = _xtime(_xtime(u8 ^ u10)) ^ _xtime(_xtime(u9 ^ u11))
-            v8 = u8 ^ t
-            v9 = u9 ^ t
-            v10 = u10 ^ t
-            v11 = u11 ^ t
-            state[8] = _xtime(v8 ^ v9) ^ v9 ^ v10 ^ v11
-            state[9] = _xtime(v9 ^ v10) ^ v10 ^ v11 ^ v8
-            state[10] = _xtime(v10 ^ v11) ^ v11 ^ v8 ^ v9
-            state[11] = _xtime(v11 ^ v8) ^ v8 ^ v9 ^ v10
-
-            u12 = s12 ^ rk[12]
-            u13 = s13 ^ rk[13]
-            u14 = s14 ^ rk[14]
-            u15 = s15 ^ rk[15]
-            t = _xtime(_xtime(u12 ^ u14)) ^ _xtime(_xtime(u13 ^ u15))
-            v12 = u12 ^ t
-            v13 = u13 ^ t
-            v14 = u14 ^ t
-            v15 = u15 ^ t
-            state[12] = _xtime(v12 ^ v13) ^ v13 ^ v14 ^ v15
-            state[13] = _xtime(v13 ^ v14) ^ v14 ^ v15 ^ v12
-            state[14] = _xtime(v14 ^ v15) ^ v15 ^ v12 ^ v13
-            state[15] = _xtime(v15 ^ v12) ^ v12 ^ v13 ^ v14
+            substituted = [_rsbox[value] ^ rk[i] for i, value in enumerate(shifted)]
+            state = []
+            for offset in range(0, 16, 4):
+                state.extend(_inverse_mix_column(substituted[offset:offset + 4]))
 
         rk = self.round_keys[0]
         return bytes([
