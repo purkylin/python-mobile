@@ -47,8 +47,8 @@ public final class PythonEngine: @unchecked Sendable {
 
         config.module_search_paths_set = 1
         var modulePaths = [stdlibPath, dynloadPath, pythonHome]
-        if let packageLibPath = resolvePackageLibraryPath() {
-            modulePaths.append("\(packageLibPath)/python3.14")
+        if let packagePath = resolvePackagePath() {
+            modulePaths.append(packagePath)
         }
 
         for path in modulePaths {
@@ -284,9 +284,9 @@ public final class PythonEngine: @unchecked Sendable {
         return nil
     }
 
-    private func resolvePackageLibraryPath() -> String? {
+    private func resolvePackagePath() -> String? {
         #if SWIFT_PACKAGE
-        if let modulePath = Bundle.module.path(forResource: "lib", ofType: nil) {
+        if let modulePath = Bundle.module.path(forResource: "packages", ofType: nil) {
             return modulePath
         }
         #endif
