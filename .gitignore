@@ -5,3 +5,4 @@ xcuserdata/
 *.xcworkspace
 *.xcuserdatad
 .swiftpm/
+/Python.xcframework/

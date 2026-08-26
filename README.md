@@ -1,10 +1,10 @@
 # PythonMobile 🐍📱
 
-A lightweight, modern, Swift 6 native **CPython 3.14 embedded runtime** for **iOS 18+** and **macOS 15+**.
+A lightweight, modern, Swift 6 native **CPython 3.15 embedded runtime** for **iOS 18+** and **macOS 15+**.
 
 ## Features
 
-- 🚀 **CPython 3.14 Isolation**: Uses official `PyConfig` isolated configuration inside the iOS Sandbox.
+- 🚀 **CPython 3.15 Isolation**: Uses official `PyConfig` isolated configuration inside the iOS Sandbox.
 - 📦 **Remote Binary Target**: Automatically downloads and links `Python.xcframework` via Swift Package Manager.
 - 🛡️ **Thread Safety & Crash Protection**: Built-in mutex locking and error stack trace capture.
 - 🔒 **Zero String Escaping Issues**: Base64 encoded IPC eliminates syntax warnings and escaping errors.
@@ -84,4 +84,4 @@ print(result) // ["status": "ok", "greeting": "Hello Alice, you are 28 years old
 
 ## License
 
-MIT License. Includes CPython 3.14 licensed under the Python Software Foundation License.
+MIT License. Includes CPython 3.15 licensed under the Python Software Foundation License.

@@ -38,11 +38,20 @@ public final class PythonEngine: @unchecked Sendable {
             PyMem_RawFree(wHome)
         }
 
-        let stdlibPath = "\(libPath)/python3.14"
-        let dynloadPath = "\(libPath)/python3.14/lib-dynload"
+        guard let pythonVersion = resolvePythonVersion(in: libPath) else {
+            throw PythonError.runtimeUnavailable("Missing Python version directory in Bundle")
+        }
+
+        let stdlibPath = "\(libPath)/\(pythonVersion)"
+        let dynloadPath = "\(stdlibPath)/lib-dynload"
 
         config.module_search_paths_set = 1
-        for path in [stdlibPath, dynloadPath, pythonHome] {
+        var modulePaths = [stdlibPath, dynloadPath, pythonHome]
+        if let packageLibPath = resolvePackageLibraryPath() {
+            modulePaths.append("\(packageLibPath)/python3.14")
+        }
+
+        for path in modulePaths {
             if let wPath = Py_DecodeLocale(path, nil) {
                 _ = withUnsafeMutablePointer(to: &config.module_search_paths) { listPtr in
                     PyWideStringList_Append(listPtr, wPath)
@@ -255,15 +264,16 @@ public final class PythonEngine: @unchecked Sendable {
     }
 
     private func resolveStandardLibraryPath() -> String? {
+        if let pythonHome = Bundle.main.path(forResource: "python", ofType: nil) {
+            let libPath = "\(pythonHome)/lib"
+            if FileManager.default.fileExists(atPath: libPath) {
+                return libPath
+            }
+        }
+
         #if SWIFT_PACKAGE
         if let modulePath = Bundle.module.path(forResource: "lib", ofType: nil) {
             return modulePath
-        }
-        if let resPath = Bundle.module.resourcePath {
-            let direct = "\(resPath)/lib"
-            if FileManager.default.fileExists(atPath: direct) {
-                return direct
-            }
         }
         #endif
 
@@ -271,10 +281,28 @@ public final class PythonEngine: @unchecked Sendable {
             return mainPath
         }
 
-        if let pythonHome = Bundle.main.path(forResource: "python", ofType: nil) {
-            return "\(pythonHome)/lib"
-        }
-
         return nil
+    }
+
+    private func resolvePackageLibraryPath() -> String? {
+        #if SWIFT_PACKAGE
+        if let modulePath = Bundle.module.path(forResource: "lib", ofType: nil) {
+            return modulePath
+        }
+        #endif
+        return nil
+    }
+
+    private func resolvePythonVersion(in libPath: String) -> String? {
+        let directoryURL = URL(fileURLWithPath: libPath, isDirectory: true)
+        let contents = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        return contents?.first { url in
+            guard url.lastPathComponent.hasPrefix("python3.") else { return false }
+            return (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }?.lastPathComponent
     }
 }

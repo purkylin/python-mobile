@@ -16,8 +16,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "Python",
-            url: "https://cdn.9228.eu/python/Python-3.14.xcframework.zip",
-            checksum: "8e8ca477adab72cf08d7c7ccdca63df129d534ef7920747acc2e8000a2e05ff5"
+            url: "https://cdn.9228.eu/python/Python-3.15.0rc1.zip",
+            checksum: "2ea949a624230de7f2c1ab99454e412d042792d7df06912ad02602abd6dac6b4"
         ),
         .target(
             name: "PythonMobile",
