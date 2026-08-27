@@ -50,6 +50,34 @@ struct PythonMobileTests {
         """)
     }
 
+    @Test("PyQuery CSS selectors")
+    func testPyQueryCSSSelectors() throws {
+        try PythonEngine.shared.runCode("""
+        from pyquery import PyQuery as pq
+
+        html_doc = '''
+        <html><body>
+            <div class="grid gap-5">
+                <div class="thumbnail group">
+                    <a href="/1"><img data-src="one.jpg"></a>
+                    <span class="absolute">One</span>
+                </div>
+                <div class="thumbnail group">
+                    <a href="/2"><img data-src="two.jpg"></a>
+                    <span class="absolute">Two</span>
+                </div>
+            </div>
+        </body></html>
+        '''
+        doc = pq(html_doc)
+        assert doc('body').length == 1
+        assert doc('.gap-5 .thumbnail.group').length == 2
+        assert doc('a[href]').length == 2
+        assert doc('img[data-src]').length == 2
+        assert [item('a').attr('href') for item in doc('.thumbnail.group').items()] == ['/1', '/2']
+        """)
+    }
+
     @Test("requests module compatibility")
     func testRequests() throws {
         try PythonEngine.shared.runCode("""
@@ -88,6 +116,23 @@ struct PythonMobileTests {
         standard_ciphertext = bytes.fromhex("69c4e0d86a7b0430d8cdb78070b4c55a")
         assert AES.new(standard_key, AES.MODE_ECB).encrypt(standard_plaintext) == standard_ciphertext
         assert AES.new(standard_key, AES.MODE_ECB).decrypt(standard_ciphertext) == standard_plaintext
+        """)
+    }
+
+    @Test("Crypto PBKDF2 compatibility")
+    func testCryptoPBKDF2() throws {
+        try PythonEngine.shared.runCode("""
+        from Crypto.Hash import SHA256
+        from Crypto.Protocol.KDF import PBKDF2
+
+        derived = PBKDF2(
+            b"password",
+            b"salt",
+            dkLen=32,
+            count=1,
+            hmac_hash_module=SHA256
+        )
+        assert derived.hex() == "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
         """)
     }
 

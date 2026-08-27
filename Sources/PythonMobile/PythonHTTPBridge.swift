@@ -31,6 +31,7 @@ private enum TVBoxHTTPTransport {
                 request.setValue(value, forHTTPHeaderField: key)
             }
         }
+        applyStoredWebSession(to: &request, for: url)
         if let body = values["body"] as? String {
             request.httpBody = Data(base64Encoded: body)
         }
@@ -49,7 +50,10 @@ private enum TVBoxHTTPTransport {
             if let error {
                 print("[TVBox HTTP] \(requestID) !! failed after \(elapsed)s: \(error.localizedDescription)")
             } else {
-                print("[TVBox HTTP] \(requestID) <- status=\(result.response?.statusCode ?? 0) elapsed=\(elapsed)s")
+                print(
+                    "[TVBox HTTP] \(requestID) <- status=\(result.response?.statusCode ?? 0) "
+                    + "bytes=\(data?.count ?? 0) elapsed=\(elapsed)s"
+                )
             }
             semaphore.signal()
         }
@@ -70,6 +74,22 @@ private enum TVBoxHTTPTransport {
             return failure("HTTP response was empty")
         }
 
+        let blockedPage = blockedPageEvidence(response: response, data: data)
+        if let blockedPage {
+            let challengeURL = response.url ?? url
+            print(
+                "[TVBox HTTP] verification required reason=\(blockedPage) "
+                + "url=\(challengeURL.absoluteString)"
+            )
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: Notification.Name("openSafari"),
+                    object: nil,
+                    userInfo: ["url": challengeURL, "tvboxChallenge": true]
+                )
+            }
+        }
+
         let headers = response.allHeaderFields.reduce(into: [String: String]()) { output, item in
             output[String(describing: item.key)] = String(describing: item.value)
         }
@@ -87,9 +107,72 @@ private enum TVBoxHTTPTransport {
         return resultString
     }
 
+    private static func blockedPageEvidence(
+        response: HTTPURLResponse,
+        data: Data
+    ) -> String? {
+        let headers = response.allHeaderFields.reduce(into: [String: String]()) { output, item in
+            output[String(describing: item.key).lowercased()] = String(describing: item.value).lowercased()
+        }
+        let body = String(decoding: data, as: UTF8.self).lowercased()
+        if headers["cf-mitigated"] == "challenge" {
+            return "cf-mitigated response header"
+        }
+        let hasCloudflare = headers["server"]?.contains("cloudflare") == true
+            || headers["cf-ray"] != nil
+        if hasCloudflare && [403, 429].contains(response.statusCode) {
+            return "HTTP \(response.statusCode) from Cloudflare"
+        }
+        let title = (htmlTitle(in: body) ?? "").lowercased()
+        let challengeTitles = [
+            "just a moment",
+            "checking your browser",
+            "attention required",
+            "verify you are human",
+            "security verification"
+        ]
+        if let marker = challengeTitles.first(where: { title.contains($0) }) {
+            return "verification page title '\(marker)'"
+        }
+        return nil
+    }
+
+    private static func htmlTitle(in html: String) -> String? {
+        guard let start = html.range(of: "<title", options: .caseInsensitive),
+              let openingEnd = html[start.lowerBound...].firstIndex(of: ">"),
+              let end = html.range(
+                  of: "</title>",
+                  options: .caseInsensitive,
+                  range: openingEnd..<html.endIndex
+              ) else {
+            return nil
+        }
+        return html[html.index(after: openingEnd)..<end.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func timeout(from value: Any?) -> TimeInterval {
         let seconds = (value as? NSNumber)?.doubleValue ?? 15
         return max(0.1, min(seconds, 15))
+    }
+
+    private static func applyStoredWebSession(to request: inout URLRequest, for url: URL) {
+        guard let host = url.host?.lowercased() else { return }
+        let prefix = "tvbox.webSession.\(host)"
+        let defaults = UserDefaults.standard
+        guard let cookie = defaults.string(forKey: "\(prefix).cookie"),
+              let userAgent = defaults.string(forKey: "\(prefix).userAgent"),
+              !cookie.isEmpty, !userAgent.isEmpty else {
+            return
+        }
+
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let existingCookie = request.value(forHTTPHeaderField: "Cookie")
+        let mergedCookie = [existingCookie, cookie]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "; ")
+        request.setValue(mergedCookie, forHTTPHeaderField: "Cookie")
     }
 
     private static func failure(_ message: String) -> String {

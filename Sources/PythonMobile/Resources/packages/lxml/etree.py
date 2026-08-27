@@ -54,6 +54,9 @@ class _Element:
     def __iter__(self):
         return iter(self._children)
 
+    def getchildren(self):
+        return list(self._children)
+
     def __len__(self):
         return len(self._children)
 
@@ -184,48 +187,45 @@ class XPath:
 # --- XPath Engine ---
 
 def _evaluate_xpath(node, expr):
-    if not expr or not node:
+    if not expr or node is None:
         return []
 
-    if expr == "text()" or expr == "./text()":
+    union_parts = _split_xpath(expr, "|")
+    if len(union_parts) > 1:
+        results = []
+        for part in union_parts:
+            for element in _evaluate_xpath(node, part):
+                if element not in results:
+                    results.append(element)
+        return results
+
+    if expr in ("text()", "./text()"):
         return [node.text] if node.text else []
     if expr.startswith("@") or expr.startswith("./@"):
-        attr = expr.split("@", 1)[1]
-        val = node.get(attr)
-        return [val] if val is not None else []
+        value = node.get(expr.split("@", 1)[1])
+        return [value] if value is not None else []
 
-    is_descendant = expr.startswith("//") or expr.startswith(".//") or "descendant-or-self::" in expr
-    clean_expr = re.sub(r"^(?:\.?//|descendant-or-self::\*/?)", "", expr)
-    steps = [s for s in re.split(r"/(?![\w\s]*\])", clean_expr) if s]
-
-    current_nodes = _get_all_descendants(node) if is_descendant else [node]
-
-    for step in steps:
-        if step == "text()":
-            results = []
-            for n in current_nodes:
-                if n.text:
-                    results.append(n.text)
-            return results
-        if step.startswith("@"):
-            attr = step[1:]
-            results = []
-            for n in current_nodes:
-                val = n.get(attr)
-                if val is not None:
-                    results.append(val)
-            return results
-
+    current_nodes = [node]
+    for step in _split_xpath(expr, "/"):
+        if not step:
+            continue
+        axis, node_test, predicates = _parse_step(step)
         next_nodes = []
-        for n in current_nodes:
-            candidates = [n] if is_descendant else n._children
-            for candidate in candidates:
-                if _match_step(candidate, step):
+        for context in current_nodes:
+            candidates = _axis_candidates(context, axis)
+            base_predicates = [
+                predicate for predicate in predicates
+                if not _is_position_predicate(predicate)
+            ]
+            matched = [
+                candidate for candidate in candidates
+                if _match_step(candidate, node_test, base_predicates)
+            ]
+            for position, candidate in enumerate(matched, 1):
+                if _match_step(candidate, node_test, predicates, position, len(matched)):
                     if candidate not in next_nodes:
                         next_nodes.append(candidate)
         current_nodes = next_nodes
-        is_descendant = False
-
     return current_nodes
 
 def _get_all_descendants(node):
@@ -234,34 +234,233 @@ def _get_all_descendants(node):
         nodes.extend(_get_all_descendants(child))
     return nodes
 
-def _match_step(elem, step):
-    m = re.match(r"^([\w\*\-]+)(?:\[(.*)\])?$", step)
-    if not m:
+def _split_xpath(expression, separator):
+    parts = []
+    start = 0
+    bracket_depth = 0
+    paren_depth = 0
+    quote = None
+    for index, character in enumerate(expression):
+        if quote:
+            if character == quote:
+                quote = None
+            continue
+        if character in "'\"":
+            quote = character
+        elif character == "[":
+            bracket_depth += 1
+        elif character == "]":
+            bracket_depth -= 1
+        elif character == "(":
+            paren_depth += 1
+        elif character == ")":
+            paren_depth -= 1
+        elif character == separator and bracket_depth == 0 and paren_depth == 0:
+            parts.append(expression[start:index].strip())
+            start = index + 1
+    parts.append(expression[start:].strip())
+    return parts
+
+
+def _parse_step(step):
+    axis = "child"
+    if "::" in step:
+        axis, step = step.split("::", 1)
+    node_test_end = step.find("[")
+    if node_test_end < 0:
+        return axis.strip(), step.strip(), []
+
+    node_test = step[:node_test_end].strip()
+    predicates = []
+    remainder = step[node_test_end:]
+    while remainder.startswith("["):
+        depth = 0
+        quote = None
+        end = None
+        for index, character in enumerate(remainder):
+            if quote:
+                if character == quote:
+                    quote = None
+                continue
+            if character in "'\"":
+                quote = character
+            elif character == "[":
+                depth += 1
+            elif character == "]":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        if end is None:
+            break
+        predicates.append(remainder[1:end].strip())
+        remainder = remainder[end + 1:].strip()
+    return axis.strip(), node_test, predicates
+
+
+def _axis_candidates(node, axis):
+    if axis == "descendant-or-self":
+        return _get_all_descendants(node)
+    if axis == "descendant":
+        return _get_all_descendants(node)[1:]
+    if axis == "self":
+        return [node]
+    if axis == "parent":
+        return [node.parent] if node.parent else []
+    if axis == "following-sibling":
+        if not node.parent:
+            return []
+        try:
+            index = node.parent._children.index(node)
+        except ValueError:
+            return []
+        return node.parent._children[index + 1:]
+    return list(node._children)
+
+
+def _match_step(elem, node_test, predicates, position=1, total=1):
+    if elem is None or (node_test != "*" and elem.tag != node_test.lower()):
         return False
-    tag, pred = m.groups()
-    if tag != "*" and elem.tag != tag.lower():
-        return False
-    if not pred:
+    return all(_match_predicate(elem, predicate, position, total) for predicate in predicates)
+
+
+def _match_predicate(elem, predicate, position, total):
+    predicate = _strip_outer_parens(predicate.strip())
+    for operator in (" or ", " and "):
+        parts = _split_text_operator(predicate, operator)
+        if len(parts) > 1:
+            if operator.strip() == "or":
+                return any(_match_predicate(elem, part, position, total) for part in parts)
+            return all(_match_predicate(elem, part, position, total) for part in parts)
+
+    not_match = re.fullmatch(r"not\((.*)\)", predicate, re.S)
+    if not_match:
+        return not _match_predicate(elem, not_match.group(1), position, total)
+    if predicate in ("", "true()"):
         return True
 
-    attr_match = re.match(r"@([\w\-]+)\s*=\s*['\"]([^'\"]*)['\"]", pred)
-    if attr_match:
-        attr_name, attr_val = attr_match.groups()
-        return elem.get(attr_name) == attr_val
+    if predicate.startswith("position()"):
+        if " mod " in predicate:
+            match = re.search(r"position\(\)\s+mod\s+(\d+)\s*=\s*(\d+)", predicate)
+            return bool(match and position % int(match.group(1)) == int(match.group(2)))
+        match = re.search(r"position\(\)\s*=\s*(last\(\)|(\d+))", predicate)
+        if match:
+            return position == total if match.group(1) == "last()" else position == int(match.group(2))
 
-    contains_match = re.match(r"contains\(\s*@([\w\-]+)\s*,\s*['\"]([^'\"]*)['\"]\s*\)", pred)
+    sibling_match = re.fullmatch(r"count\(preceding-sibling::\*\)\s*=\s*(\d+)", predicate)
+    if sibling_match:
+        if not elem.parent:
+            return False
+        return len(elem.parent._children[:elem.parent._children.index(elem)]) == int(sibling_match.group(1))
+
+    self_match = re.fullmatch(r"self::([\w*-]+)", predicate)
+    if self_match:
+        return self_match.group(1) == "*" or elem.tag == self_match.group(1).lower()
+
+    name_match = re.fullmatch(r"name\(\.\)\s*=\s*['\"]([^'\"]+)['\"]", predicate)
+    if name_match:
+        return elem.tag == name_match.group(1).lower()
+
+    class_matches = re.findall(
+        r"contains\(concat\('\s*',\s*normalize-space\(@class\),\s*'\s*'\),\s*['\"]\s*([^'\"]*?)\s*['\"]\)",
+        predicate
+    )
+    if class_matches:
+        classes = set((elem.get("class") or "").split())
+        return all(value in classes for value in class_matches)
+
+    contains_match = re.fullmatch(
+        r"contains\(\s*@([\w-]+)\s*,\s*['\"]([^'\"]*)['\"]\s*\)", predicate
+    )
     if contains_match:
-        attr_name, substr = contains_match.groups()
-        val = elem.get(attr_name) or ""
-        return substr in val
+        return contains_match.group(2) in (elem.get(contains_match.group(1)) or "")
 
-    if pred.startswith("@"):
-        return elem.get(pred[1:]) is not None
+    text_contains = re.fullmatch(r"contains\(\.\s*,\s*['\"]([^'\"]*)['\"]\s*\)", predicate)
+    if text_contains:
+        return text_contains.group(1) in _element_text(elem)
 
-    if pred.isdigit():
-        idx = int(pred)
-        if elem.parent:
-            siblings = [c for c in elem.parent._children if c.tag == elem.tag]
-            return siblings.index(elem) + 1 == idx if elem in siblings else False
+    attr_match = re.fullmatch(r"@([\w-]+)\s*(=|!=)\s*['\"]([^'\"]*)['\"]", predicate)
+    if attr_match:
+        value = elem.get(attr_match.group(1))
+        expected = attr_match.group(3)
+        return value == expected if attr_match.group(2) == "=" else value is not None and value != expected
 
+    attr_exists = re.fullmatch(r"@([\w-]+)", predicate)
+    if attr_exists:
+        return elem.get(attr_exists.group(1)) is not None
     return True
+
+
+def _is_position_predicate(predicate):
+    predicate = _strip_outer_parens(predicate.strip())
+    return (
+        predicate.startswith("position()")
+        or predicate == "last()"
+        or predicate.startswith("count(preceding-sibling::")
+    )
+
+
+def _element_text(element):
+    return "".join(element.itertext())
+
+
+def _split_text_operator(expression, operator):
+    parts = []
+    start = 0
+    bracket_depth = 0
+    paren_depth = 0
+    quote = None
+    index = 0
+    while index <= len(expression) - len(operator):
+        character = expression[index]
+        if quote:
+            if character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in "'\"":
+            quote = character
+            index += 1
+            continue
+        if character == "(":
+            paren_depth += 1
+        elif character == ")":
+            paren_depth -= 1
+        elif character == "[":
+            bracket_depth += 1
+        elif character == "]":
+            bracket_depth -= 1
+        if expression.startswith(operator, index) and bracket_depth == 0 and paren_depth == 0:
+            parts.append(expression[start:index].strip())
+            start = index + len(operator)
+            index = start
+            continue
+        index += 1
+    if parts:
+        parts.append(expression[start:].strip())
+    return parts or [expression]
+
+
+def _strip_outer_parens(expression):
+    while expression.startswith("(") and expression.endswith(")"):
+        depth = 0
+        quote = None
+        balanced = True
+        for index, character in enumerate(expression):
+            if quote:
+                if character == quote:
+                    quote = None
+                continue
+            if character in "'\"":
+                quote = character
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0 and index != len(expression) - 1:
+                    balanced = False
+                    break
+        if not balanced or depth != 0:
+            break
+        expression = expression[1:-1].strip()
+    return expression
