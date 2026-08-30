@@ -190,6 +190,8 @@ def _evaluate_xpath(node, expr):
     if not expr or node is None:
         return []
 
+    expr = _normalize_xpath(expr)
+
     union_parts = _split_xpath(expr, "|")
     if len(union_parts) > 1:
         results = []
@@ -209,6 +211,11 @@ def _evaluate_xpath(node, expr):
     for step in _split_xpath(expr, "/"):
         if not step:
             continue
+        if step in ("text()", "./text()"):
+            return [context.text for context in current_nodes if context.text]
+        if step.startswith("@") or step.startswith("./@"):
+            name = step.split("@", 1)[1]
+            return [value for context in current_nodes if (value := context.get(name)) is not None]
         axis, node_test, predicates = _parse_step(step)
         next_nodes = []
         for context in current_nodes:
@@ -227,6 +234,55 @@ def _evaluate_xpath(node, expr):
                         next_nodes.append(candidate)
         current_nodes = next_nodes
     return current_nodes
+
+
+def _normalize_xpath(expr):
+    """Translate the common XPath // shorthand into supported axes.
+
+    The bundled parser evaluates explicit axes, but the shorthand used by
+    lxml callers (// and .//) was previously treated as two child steps.
+    Keep separators inside predicates and quoted strings untouched.
+    """
+    result = []
+    quote = None
+    bracket_depth = 0
+    index = 0
+    while index < len(expr):
+        character = expr[index]
+        if quote:
+            result.append(character)
+            if character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in "'\"":
+            quote = character
+            result.append(character)
+            index += 1
+            continue
+        if character == "[":
+            bracket_depth += 1
+            result.append(character)
+            index += 1
+            continue
+        if character == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+            result.append(character)
+            index += 1
+            continue
+        if bracket_depth == 0 and character == "/" and index + 1 < len(expr) and expr[index + 1] == "/":
+            if result and result[-1] == ".":
+                result.pop()
+                result.append("descendant-or-self::")
+            elif result:
+                result.append("/descendant-or-self::")
+            else:
+                result.append("descendant-or-self::")
+            index += 2
+            continue
+        result.append(character)
+        index += 1
+    return "".join(result)
 
 def _get_all_descendants(node):
     nodes = [node]

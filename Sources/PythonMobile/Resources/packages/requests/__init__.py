@@ -7,6 +7,7 @@ import urllib.request
 
 from . import exceptions
 from .exceptions import *
+from . import packages
 
 
 class _Codes:
