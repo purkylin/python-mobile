@@ -23,7 +23,7 @@ let package = Package(
             name: "PythonMobile",
             dependencies: ["Python"],
             resources: [
-                .copy("Resources/packages")
+                .copy("Resources/site-packages")
             ]
         ),
         .testTarget(

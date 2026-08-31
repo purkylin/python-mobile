@@ -286,7 +286,7 @@ public final class PythonEngine: @unchecked Sendable {
 
     private func resolvePackagePath() -> String? {
         #if SWIFT_PACKAGE
-        if let modulePath = Bundle.module.path(forResource: "packages", ofType: nil) {
+        if let modulePath = Bundle.module.path(forResource: "site-packages", ofType: nil) {
             return modulePath
         }
         #endif
